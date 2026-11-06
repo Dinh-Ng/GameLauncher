@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
@@ -140,6 +141,7 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
     var showDisplaySheet by remember { mutableStateOf(false) }
     var showSortMenu by remember { mutableStateOf(false) }
     var gameToRemove by remember { mutableStateOf<GameModel?>(null) }
+    var randomSelectedGame by remember { mutableStateOf<GameModel?>(null) }
 
     // Làm mới dữ liệu khi app quay lại foreground (ON_RESUME)
     DisposableEffect(lifecycleOwner) {
@@ -169,6 +171,40 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
         }
     }
 
+    fun selectRandomApp() {
+        val library = state.library
+        if (library.isEmpty()) {
+            Toast.makeText(context, "Thư viện đang trống!", Toast.LENGTH_SHORT).show()
+            return
+        }
+        // Sắp xếp thư viện theo thứ tự: dùng gần đây nhất đứng đầu
+        val sortedByRecency = library.sortedWith(compareByDescending<GameModel> { it.lastPlayed }.thenBy { it.name })
+
+        // Tính trọng số: index 0 (gần nhất) = 1, index 1 = 2, index 2 = 4, ...
+        val weights = sortedByRecency.mapIndexed { index, _ -> Math.pow(2.0, index.toDouble()) }
+        val totalWeight = weights.sum()
+
+        val selected = if (totalWeight <= 0.0) {
+            library.random()
+        } else {
+            val randomValue = kotlin.random.Random.nextDouble() * totalWeight
+            var cumulativeSum = 0.0
+            var found = sortedByRecency.first()
+
+            for (i in sortedByRecency.indices) {
+                cumulativeSum += weights[i]
+                if (randomValue <= cumulativeSum) {
+                    found = sortedByRecency[i]
+                    break
+                }
+            }
+            found
+        }
+
+        randomSelectedGame = selected
+        Toast.makeText(context, "Mở ngẫu nhiên: ${selected.name}", Toast.LENGTH_SHORT).show()
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
@@ -180,6 +216,11 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
                     actionIconContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                 ),
                 actions = {
+                    // Nút Thêm game vào thư viện
+                    IconButton(onClick = { showAddSheet = true }) {
+                        Icon(Icons.Filled.Add, contentDescription = "Thêm game")
+                    }
+
                     // Menu sắp xếp
                     Box {
                         IconButton(onClick = { showSortMenu = true }) {
@@ -230,11 +271,11 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
         },
         floatingActionButton = {
             FloatingActionButton(
-                onClick = { showAddSheet = true },
+                onClick = { selectRandomApp() },
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary
             ) {
-                Icon(Icons.Filled.Add, contentDescription = "Thêm game")
+                Icon(Icons.Filled.Shuffle, contentDescription = "Mở app ngẫu nhiên")
             }
         }
     ) { innerPadding ->
@@ -369,6 +410,49 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
             },
             dismissButton = {
                 TextButton(onClick = { gameToRemove = null }) { Text("Hủy") }
+            }
+        )
+    }
+
+    // Hộp thoại thông báo khi chọn app ngẫu nhiên
+    randomSelectedGame?.let { game ->
+        AlertDialog(
+            onDismissRequest = { randomSelectedGame = null },
+            icon = {
+                Image(
+                    bitmap = game.icon,
+                    contentDescription = game.name,
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                )
+            },
+            title = { Text("Mở ứng dụng ngẫu nhiên") },
+            text = {
+                Text(
+                    text = "Đã chọn: ${game.name}\n(Tỉ lệ tính theo tần suất sử dụng)",
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val gameToLaunch = game
+                    randomSelectedGame = null
+                    launchGame(gameToLaunch)
+                }) {
+                    Text("Mở ngay")
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { selectRandomApp() }) {
+                        Text("Đổi app")
+                    }
+                    TextButton(onClick = { randomSelectedGame = null }) {
+                        Text("Hủy")
+                    }
+                }
             }
         )
     }
