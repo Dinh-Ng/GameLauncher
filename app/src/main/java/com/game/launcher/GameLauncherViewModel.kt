@@ -335,10 +335,40 @@ class GameLauncherViewModel(application: Application) : AndroidViewModel(applica
             val usageStatsManager = appContext.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
                 ?: return emptyMap()
             val endTime = System.currentTimeMillis()
-            // Truy vấn trong 1 năm gần nhất để bao quát tất cả game đã từng mở
             val startTime = endTime - 1000L * 60 * 60 * 24 * 365
+            val realTimeStartTime = endTime - 1000L * 60 * 60 * 24 * 30
+
+            val result = mutableMapOf<String, Long>()
+
+            // 1. Dữ liệu tổng hợp từ queryAndAggregateUsageStats
             val aggregated = usageStatsManager.queryAndAggregateUsageStats(startTime, endTime)
-            aggregated.mapValues { it.value.lastTimeUsed }
+            for ((pkg, stats) in aggregated) {
+                if (stats.lastTimeUsed > 0L) {
+                    result[pkg] = stats.lastTimeUsed
+                }
+            }
+
+            // 2. Sự kiện real-time mới nhất từ queryEvents (không bị trễ do cache hệ thống)
+            val events = usageStatsManager.queryEvents(realTimeStartTime, endTime)
+            val event = android.app.usage.UsageEvents.Event()
+            while (events.hasNextEvent()) {
+                events.getNextEvent(event)
+                val eventType = event.eventType
+                if (eventType == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED ||
+                    eventType == android.app.usage.UsageEvents.Event.ACTIVITY_PAUSED ||
+                    eventType == android.app.usage.UsageEvents.Event.ACTIVITY_STOPPED
+                ) {
+                    val pkg = event.packageName
+                    if (!pkg.isNullOrEmpty() && pkg != ownPackage) {
+                        val current = result[pkg] ?: 0L
+                        if (event.timeStamp > current) {
+                            result[pkg] = event.timeStamp
+                        }
+                    }
+                }
+            }
+
+            result
         } catch (_: Exception) {
             emptyMap()
         }
