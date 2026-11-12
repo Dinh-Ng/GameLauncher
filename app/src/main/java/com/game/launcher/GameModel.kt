@@ -38,6 +38,9 @@ enum class UsageAccessStatus {
 
 /**
  * Thông tin một ứng dụng/game đã cài trên thiết bị.
+ * - [name]: Tên gốc từ PackageManager, không thay đổi.
+ * - [displayName]: Tên hiển thị (tên tùy chỉnh nếu có, nếu không thì bằng [name]).
+ *   Được ghép sẵn trong ViewModel, UI chỉ dùng [displayName].
  * Icon được chuyển sẵn thành ImageBitmap (trên luồng IO) để Compose vẽ trực tiếp, không giữ Drawable.
  */
 @Immutable
@@ -47,5 +50,6 @@ data class GameModel(
     val icon: ImageBitmap,
     val isGame: Boolean = false,
     val isSystemApp: Boolean = false,
-    val lastPlayed: Long = 0L
+    val lastPlayed: Long = 0L,
+    val displayName: String = name
 )

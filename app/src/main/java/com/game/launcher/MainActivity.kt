@@ -36,7 +36,11 @@ import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SportsEsports
@@ -75,7 +79,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -127,6 +133,17 @@ fun GameLauncherTheme(content: @Composable () -> Unit) {
 }
 
 // ------------------------------------------------------------------------------------------
+// Sealed class định nghĩa các mục DropdownMenu của ô game — dễ mở rộng
+// ------------------------------------------------------------------------------------------
+
+private sealed interface GameMenuAction {
+    data object Rename : GameMenuAction
+    data object AppInfo : GameMenuAction
+    data object Uninstall : GameMenuAction
+    data object RemoveFromLibrary : GameMenuAction
+}
+
+// ------------------------------------------------------------------------------------------
 // Màn hình chính
 // ------------------------------------------------------------------------------------------
 
@@ -140,8 +157,14 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
     var showAddSheet by remember { mutableStateOf(false) }
     var showDisplaySheet by remember { mutableStateOf(false) }
     var showSortMenu by remember { mutableStateOf(false) }
-    var gameToRemove by remember { mutableStateOf<GameModel?>(null) }
     var randomSelectedGame by remember { mutableStateOf<GameModel?>(null) }
+
+    // State cho context menu neo vào ô game
+    var contextMenuGame by remember { mutableStateOf<GameModel?>(null) }
+
+    // State cho các dialog
+    var renameGame by remember { mutableStateOf<GameModel?>(null) }
+    var removeConfirmGame by remember { mutableStateOf<GameModel?>(null) }
 
     // Làm mới dữ liệu khi app quay lại foreground (ON_RESUME)
     DisposableEffect(lifecycleOwner) {
@@ -159,7 +182,7 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
     fun launchGame(game: GameModel) {
         val intent = viewModel.getLaunchIntent(game.packageName)
         if (intent == null) {
-            Toast.makeText(context, "Không thể mở ${game.name}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Không thể mở ${game.displayName}", Toast.LENGTH_SHORT).show()
             return
         }
         try {
@@ -167,7 +190,7 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
             // Ghi nhận thời điểm chơi nội bộ khi mở thành công
             viewModel.recordGameLaunched(game.packageName)
         } catch (e: ActivityNotFoundException) {
-            Toast.makeText(context, "Không thể mở ${game.name}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Không thể mở ${game.displayName}", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -177,10 +200,7 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
             Toast.makeText(context, "Thư viện đang trống!", Toast.LENGTH_SHORT).show()
             return
         }
-        // Sắp xếp thư viện theo thứ tự: dùng gần đây nhất đứng đầu
-        val sortedByRecency = library.sortedWith(compareByDescending<GameModel> { it.lastPlayed }.thenBy { it.name })
-
-        // Tính trọng số: index 0 (gần nhất) = 1, index 1 = 2, index 2 = 4, ...
+        val sortedByRecency = library.sortedWith(compareByDescending<GameModel> { it.lastPlayed }.thenBy { it.displayName })
         val weights = sortedByRecency.mapIndexed { index, _ -> Math.pow(2.0, index.toDouble()) }
         val totalWeight = weights.sum()
 
@@ -190,7 +210,6 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
             val randomValue = kotlin.random.Random.nextDouble() * totalWeight
             var cumulativeSum = 0.0
             var found = sortedByRecency.first()
-
             for (i in sortedByRecency.indices) {
                 cumulativeSum += weights[i]
                 if (randomValue <= cumulativeSum) {
@@ -202,7 +221,32 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
         }
 
         randomSelectedGame = selected
-        Toast.makeText(context, "Mở ngẫu nhiên: ${selected.name}", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "Mở ngẫu nhiên: ${selected.displayName}", Toast.LENGTH_SHORT).show()
+    }
+
+    fun handleMenuAction(action: GameMenuAction, game: GameModel) {
+        when (action) {
+            is GameMenuAction.Rename -> {
+                renameGame = game
+            }
+            is GameMenuAction.AppInfo -> {
+                try {
+                    context.startActivity(viewModel.getAppDetailsIntent(game.packageName))
+                } catch (e: ActivityNotFoundException) {
+                    Toast.makeText(context, "Không thể mở thông tin ứng dụng", Toast.LENGTH_SHORT).show()
+                }
+            }
+            is GameMenuAction.Uninstall -> {
+                try {
+                    context.startActivity(viewModel.getUninstallIntent(game.packageName))
+                } catch (e: ActivityNotFoundException) {
+                    Toast.makeText(context, "Không thể gỡ cài đặt ứng dụng", Toast.LENGTH_SHORT).show()
+                }
+            }
+            is GameMenuAction.RemoveFromLibrary -> {
+                removeConfirmGame = game
+            }
+        }
     }
 
     Scaffold(
@@ -316,8 +360,14 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
                                 game = game,
                                 sortMode = state.settings.sortMode,
                                 columnsMode = state.settings.columns,
+                                isMenuExpanded = contextMenuGame?.packageName == game.packageName,
                                 onClick = { launchGame(game) },
-                                onLongClick = { gameToRemove = game },
+                                onLongClick = { contextMenuGame = game },
+                                onMenuDismiss = { contextMenuGame = null },
+                                onMenuAction = { action ->
+                                    contextMenuGame = null
+                                    handleMenuAction(action, game)
+                                },
                                 modifier = Modifier.animateItem()
                             )
                         }
@@ -396,20 +446,36 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
         )
     }
 
+    // Dialog đổi tên game
+    renameGame?.let { game ->
+        RenameGameDialog(
+            game = game,
+            onConfirm = { newName ->
+                viewModel.onRename(game.packageName, newName)
+                renameGame = null
+            },
+            onResetName = {
+                viewModel.onResetName(game.packageName)
+                renameGame = null
+            },
+            onDismiss = { renameGame = null }
+        )
+    }
+
     // Hộp thoại xác nhận xóa game khỏi thư viện
-    gameToRemove?.let { game ->
+    removeConfirmGame?.let { game ->
         AlertDialog(
-            onDismissRequest = { gameToRemove = null },
+            onDismissRequest = { removeConfirmGame = null },
             title = { Text("Xóa khỏi thư viện?") },
-            text = { Text("${game.name} sẽ được bỏ khỏi danh sách (không gỡ cài đặt app).") },
+            text = { Text("${game.displayName} sẽ được bỏ khỏi danh sách (không gỡ cài đặt app).") },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.removeGame(game.packageName)
-                    gameToRemove = null
+                    removeConfirmGame = null
                 }) { Text("Xóa") }
             },
             dismissButton = {
-                TextButton(onClick = { gameToRemove = null }) { Text("Hủy") }
+                TextButton(onClick = { removeConfirmGame = null }) { Text("Hủy") }
             }
         )
     }
@@ -421,7 +487,7 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
             icon = {
                 Image(
                     bitmap = game.icon,
-                    contentDescription = game.name,
+                    contentDescription = game.displayName,
                     modifier = Modifier
                         .size(64.dp)
                         .clip(RoundedCornerShape(14.dp))
@@ -430,7 +496,7 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
             title = { Text("Mở ứng dụng ngẫu nhiên") },
             text = {
                 Text(
-                    text = "Đã chọn: ${game.name}\n(Tỉ lệ tính theo tần suất sử dụng)",
+                    text = "Đã chọn: ${game.displayName}\n(Tỉ lệ tính theo tần suất sử dụng)",
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -459,7 +525,61 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
 }
 
 // ------------------------------------------------------------------------------------------
-// Thành phần UI
+// Dialog đổi tên
+// ------------------------------------------------------------------------------------------
+
+@Composable
+private fun RenameGameDialog(
+    game: GameModel,
+    onConfirm: (String) -> Unit,
+    onResetName: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var text by remember(game.packageName) { mutableStateOf(game.displayName) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Đổi tên hiển thị") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    placeholder = { Text(game.name) },
+                    label = { Text("Tên hiển thị") }
+                )
+                // Nút khôi phục tên gốc
+                if (game.displayName != game.name || text != game.name) {
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(
+                        onClick = onResetName,
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Text("Khôi phục tên gốc", color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(text) },
+                enabled = text.isNotBlank()
+            ) {
+                Text("Lưu")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Hủy")
+            }
+        }
+    )
+}
+
+// ------------------------------------------------------------------------------------------
+// Thành phần UI: ô game với DropdownMenu neo
 // ------------------------------------------------------------------------------------------
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -468,10 +588,15 @@ private fun GameGridItem(
     game: GameModel,
     sortMode: SortMode,
     columnsMode: ColumnsMode,
+    isMenuExpanded: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    onMenuDismiss: () -> Unit,
+    onMenuAction: (GameMenuAction) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val haptic = LocalHapticFeedback.current
+
     // Co giãn icon và cỡ chữ linh hoạt theo số cột
     val (iconSize: Dp, titleSize: Float, subSize: Float) = when (columnsMode) {
         is ColumnsMode.Auto -> Triple(64.dp, 12f, 10f)
@@ -484,42 +609,106 @@ private fun GameGridItem(
         }
     }
 
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(16.dp))
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Image(
-            bitmap = game.icon,
-            contentDescription = game.name,
-            modifier = Modifier
-                .size(iconSize)
-                .clip(RoundedCornerShape(iconSize * 0.22f))
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = game.name,
-            fontSize = titleSize.sp,
-            lineHeight = (titleSize * 1.25f).sp,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center
-        )
+    val titleLineHeightSp = titleSize * 1.35f
+    val subLineHeightSp = subSize * 1.3f
 
-        // Dòng phụ nhỏ khi đang ở chế độ "Chơi gần nhất"
-        if (sortMode == SortMode.RECENT) {
-            Spacer(Modifier.height(2.dp))
+    // Box để DropdownMenu neo đúng vào ô game
+    Box(
+        modifier = modifier.fillMaxWidth(),
+        contentAlignment = Alignment.TopCenter
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onLongClick()
+                    }
+                )
+                .padding(6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Image(
+                bitmap = game.icon,
+                contentDescription = game.displayName,
+                modifier = Modifier
+                    .size(iconSize)
+                    .clip(RoundedCornerShape(iconSize * 0.22f))
+            )
+            Spacer(Modifier.height(4.dp))
             Text(
-                text = formatRelativeTime(game.lastPlayed),
-                fontSize = subSize.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
+                text = game.displayName,
+                fontSize = titleSize.sp,
+                lineHeight = titleLineHeightSp.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center
+            )
+
+            // Dòng phụ nhỏ khi đang ở chế độ "Chơi gần nhất"
+            if (sortMode == SortMode.RECENT) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = formatRelativeTime(game.lastPlayed),
+                    fontSize = subSize.sp,
+                    lineHeight = subLineHeightSp.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+
+        // DropdownMenu neo vào ô game
+        DropdownMenu(
+            expanded = isMenuExpanded,
+            onDismissRequest = onMenuDismiss
+        ) {
+            // 1. Đổi tên hiển thị
+            DropdownMenuItem(
+                text = { Text("Đổi tên hiển thị") },
+                leadingIcon = { Icon(Icons.Filled.DriveFileRenameOutline, contentDescription = null) },
+                onClick = { onMenuAction(GameMenuAction.Rename) }
+            )
+            // 2. Thông tin ứng dụng
+            DropdownMenuItem(
+                text = { Text("Thông tin ứng dụng") },
+                leadingIcon = { Icon(Icons.Filled.Info, contentDescription = null) },
+                onClick = { onMenuAction(GameMenuAction.AppInfo) }
+            )
+
+            // Divider ngăn cách nhóm hành động nguy hiểm
+            HorizontalDivider()
+
+            // 3. Gỡ cài đặt (màu error)
+            DropdownMenuItem(
+                text = { Text("Gỡ cài đặt", color = MaterialTheme.colorScheme.error) },
+                leadingIcon = {
+                    Icon(
+                        Icons.Filled.DeleteForever,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                },
+                onClick = { onMenuAction(GameMenuAction.Uninstall) }
+            )
+            // 4. Xóa khỏi thư viện (màu error)
+            DropdownMenuItem(
+                text = { Text("Xóa khỏi thư viện", color = MaterialTheme.colorScheme.error) },
+                leadingIcon = {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                },
+                onClick = { onMenuAction(GameMenuAction.RemoveFromLibrary) }
             )
         }
     }
