@@ -41,6 +41,7 @@ enum class UsageAccessStatus {
  * - [name]: Tên gốc từ PackageManager, không thay đổi.
  * - [displayName]: Tên hiển thị (tên tùy chỉnh nếu có, nếu không thì bằng [name]).
  *   Được ghép sẵn trong ViewModel, UI chỉ dùng [displayName].
+ * - [isPinned]: Trạng thái ghim yêu thích lên đầu danh sách.
  * Icon được chuyển sẵn thành ImageBitmap (trên luồng IO) để Compose vẽ trực tiếp, không giữ Drawable.
  */
 @Immutable
@@ -51,5 +52,6 @@ data class GameModel(
     val isGame: Boolean = false,
     val isSystemApp: Boolean = false,
     val lastPlayed: Long = 0L,
-    val displayName: String = name
+    val displayName: String = name,
+    val isPinned: Boolean = false
 )

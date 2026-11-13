@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -25,10 +26,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
@@ -44,6 +47,8 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SportsEsports
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -137,6 +142,7 @@ fun GameLauncherTheme(content: @Composable () -> Unit) {
 // ------------------------------------------------------------------------------------------
 
 private sealed interface GameMenuAction {
+    data object TogglePin : GameMenuAction
     data object Rename : GameMenuAction
     data object AppInfo : GameMenuAction
     data object Uninstall : GameMenuAction
@@ -226,6 +232,9 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
 
     fun handleMenuAction(action: GameMenuAction, game: GameModel) {
         when (action) {
+            is GameMenuAction.TogglePin -> {
+                viewModel.togglePinGame(game.packageName)
+            }
             is GameMenuAction.Rename -> {
                 renameGame = game
             }
@@ -343,6 +352,10 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
                         is ColumnsMode.Fixed -> GridCells.Fixed(cols.count)
                     }
 
+                    val pinnedGames = remember(state.library) { state.library.filter { it.isPinned } }
+                    val otherGames = remember(state.library) { state.library.filter { !it.isPinned } }
+                    val hasBothSections = pinnedGames.isNotEmpty() && otherGames.isNotEmpty()
+
                     LazyVerticalGrid(
                         columns = gridCells,
                         contentPadding = PaddingValues(
@@ -355,21 +368,68 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        items(state.library, key = { it.packageName }) { game ->
-                            GameGridItem(
-                                game = game,
-                                sortMode = state.settings.sortMode,
-                                columnsMode = state.settings.columns,
-                                isMenuExpanded = contextMenuGame?.packageName == game.packageName,
-                                onClick = { launchGame(game) },
-                                onLongClick = { contextMenuGame = game },
-                                onMenuDismiss = { contextMenuGame = null },
-                                onMenuAction = { action ->
-                                    contextMenuGame = null
-                                    handleMenuAction(action, game)
-                                },
-                                modifier = Modifier.animateItem()
-                            )
+                        if (hasBothSections) {
+                            item(
+                                span = { GridItemSpan(maxLineSpan) },
+                                key = "header_favorites"
+                            ) {
+                                SectionHeader(title = "Yêu thích")
+                            }
+                            items(pinnedGames, key = { it.packageName }) { game ->
+                                GameGridItem(
+                                    game = game,
+                                    sortMode = state.settings.sortMode,
+                                    columnsMode = state.settings.columns,
+                                    isMenuExpanded = contextMenuGame?.packageName == game.packageName,
+                                    onClick = { launchGame(game) },
+                                    onLongClick = { contextMenuGame = game },
+                                    onMenuDismiss = { contextMenuGame = null },
+                                    onMenuAction = { action ->
+                                        contextMenuGame = null
+                                        handleMenuAction(action, game)
+                                    },
+                                    modifier = Modifier.animateItem()
+                                )
+                            }
+                            item(
+                                span = { GridItemSpan(maxLineSpan) },
+                                key = "header_all"
+                            ) {
+                                SectionHeader(title = "Tất cả game")
+                            }
+                            items(otherGames, key = { it.packageName }) { game ->
+                                GameGridItem(
+                                    game = game,
+                                    sortMode = state.settings.sortMode,
+                                    columnsMode = state.settings.columns,
+                                    isMenuExpanded = contextMenuGame?.packageName == game.packageName,
+                                    onClick = { launchGame(game) },
+                                    onLongClick = { contextMenuGame = game },
+                                    onMenuDismiss = { contextMenuGame = null },
+                                    onMenuAction = { action ->
+                                        contextMenuGame = null
+                                        handleMenuAction(action, game)
+                                    },
+                                    modifier = Modifier.animateItem()
+                                )
+                            }
+                        } else {
+                            items(state.library, key = { it.packageName }) { game ->
+                                GameGridItem(
+                                    game = game,
+                                    sortMode = state.settings.sortMode,
+                                    columnsMode = state.settings.columns,
+                                    isMenuExpanded = contextMenuGame?.packageName == game.packageName,
+                                    onClick = { launchGame(game) },
+                                    onLongClick = { contextMenuGame = game },
+                                    onMenuDismiss = { contextMenuGame = null },
+                                    onMenuAction = { action ->
+                                        contextMenuGame = null
+                                        handleMenuAction(action, game)
+                                    },
+                                    modifier = Modifier.animateItem()
+                                )
+                            }
                         }
                     }
                 }
@@ -525,6 +585,23 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
 }
 
 // ------------------------------------------------------------------------------------------
+// Tiêu đề nhóm trong danh sách lưới
+// ------------------------------------------------------------------------------------------
+
+@Composable
+private fun SectionHeader(title: String, modifier: Modifier = Modifier) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 12.dp, top = 16.dp, bottom = 4.dp)
+    )
+}
+
+// ------------------------------------------------------------------------------------------
 // Dialog đổi tên
 // ------------------------------------------------------------------------------------------
 
@@ -579,7 +656,7 @@ private fun RenameGameDialog(
 }
 
 // ------------------------------------------------------------------------------------------
-// Thành phần UI: ô game với DropdownMenu neo
+// Thành phần UI: ô game với DropdownMenu neo & huy hiệu ghim
 // ------------------------------------------------------------------------------------------
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -609,6 +686,7 @@ private fun GameGridItem(
         }
     }
 
+    // Chiều cao cố định cho khung tên (luôn đủ 2 dòng) và khung thời gian để lưới phẳng đều tăm tắp
     val titleLineHeightSp = titleSize * 1.35f
     val subLineHeightSp = subSize * 1.3f
 
@@ -631,13 +709,34 @@ private fun GameGridItem(
                 .padding(6.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Image(
-                bitmap = game.icon,
-                contentDescription = game.displayName,
-                modifier = Modifier
-                    .size(iconSize)
-                    .clip(RoundedCornerShape(iconSize * 0.22f))
-            )
+            // Khung Icon kèm huy hiệu ngôi sao nhỏ khi được ghim
+            Box(contentAlignment = Alignment.TopEnd) {
+                Image(
+                    bitmap = game.icon,
+                    contentDescription = game.displayName,
+                    modifier = Modifier
+                        .size(iconSize)
+                        .clip(RoundedCornerShape(iconSize * 0.22f))
+                )
+                if (game.isPinned) {
+                    Box(
+                        modifier = Modifier
+                            .padding(3.dp)
+                            .size(iconSize * 0.28f)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.65f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Star,
+                            contentDescription = "Đã ghim",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(iconSize * 0.18f)
+                        )
+                    }
+                }
+            }
+
             Spacer(Modifier.height(4.dp))
             Text(
                 text = game.displayName,
@@ -670,13 +769,25 @@ private fun GameGridItem(
             expanded = isMenuExpanded,
             onDismissRequest = onMenuDismiss
         ) {
-            // 1. Đổi tên hiển thị
+            // 1. Ghim lên đầu / Bỏ ghim
+            DropdownMenuItem(
+                text = { Text(if (game.isPinned) "Bỏ ghim" else "Ghim lên đầu") },
+                leadingIcon = {
+                    Icon(
+                        imageVector = if (game.isPinned) Icons.Filled.StarBorder else Icons.Filled.Star,
+                        contentDescription = null,
+                        tint = if (game.isPinned) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary
+                    )
+                },
+                onClick = { onMenuAction(GameMenuAction.TogglePin) }
+            )
+            // 2. Đổi tên hiển thị
             DropdownMenuItem(
                 text = { Text("Đổi tên hiển thị") },
                 leadingIcon = { Icon(Icons.Filled.DriveFileRenameOutline, contentDescription = null) },
                 onClick = { onMenuAction(GameMenuAction.Rename) }
             )
-            // 2. Thông tin ứng dụng
+            // 3. Thông tin ứng dụng
             DropdownMenuItem(
                 text = { Text("Thông tin ứng dụng") },
                 leadingIcon = { Icon(Icons.Filled.Info, contentDescription = null) },
@@ -686,7 +797,7 @@ private fun GameGridItem(
             // Divider ngăn cách nhóm hành động nguy hiểm
             HorizontalDivider()
 
-            // 3. Gỡ cài đặt (màu error)
+            // 4. Gỡ cài đặt (màu error)
             DropdownMenuItem(
                 text = { Text("Gỡ cài đặt", color = MaterialTheme.colorScheme.error) },
                 leadingIcon = {
@@ -698,7 +809,7 @@ private fun GameGridItem(
                 },
                 onClick = { onMenuAction(GameMenuAction.Uninstall) }
             )
-            // 4. Xóa khỏi thư viện (màu error)
+            // 5. Xóa khỏi thư viện (màu error)
             DropdownMenuItem(
                 text = { Text("Xóa khỏi thư viện", color = MaterialTheme.colorScheme.error) },
                 leadingIcon = {

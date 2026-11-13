@@ -39,15 +39,17 @@ private val KEY_INTERNAL_TIMESTAMPS = stringPreferencesKey("internal_timestamps"
 private val KEY_SORT_MODE = stringPreferencesKey("sort_mode")
 private val KEY_COLUMNS_COUNT = intPreferencesKey("columns_count")
 private val KEY_USAGE_PERMISSION_DISMISSED = booleanPreferencesKey("usage_permission_dismissed")
-/** Lưu tên tùy chỉnh theo format "package|tên\npackage|tên" */
+/** Lưu tên tùy chỉnh theo format "package\u0000tên\npackage\u0000tên" */
 private val KEY_CUSTOM_NAMES = stringPreferencesKey("custom_names")
+/** Lưu tập package các game được ghim yêu thích lên đầu */
+private val KEY_PINNED_PACKAGES = stringSetPreferencesKey("pinned_packages")
 
 private const val ICON_SIZE_PX = 128
 
 /** Trạng thái duy nhất mà UI quan sát. */
 data class GameLauncherUiState(
     val isLoading: Boolean = true,
-    /** Các game đã nằm trong thư viện của người dùng (đã sắp xếp, displayName đã ghép). */
+    /** Các game đã nằm trong thư viện của người dùng (đã sắp xếp, displayName và isPinned đã ghép). */
     val library: List<GameModel> = emptyList(),
     /** Các app đã cài nhưng chưa có trong thư viện (đã lọc theo tìm kiếm / app hệ thống). */
     val candidates: List<GameModel> = emptyList(),
@@ -77,6 +79,7 @@ class GameLauncherViewModel(application: Application) : AndroidViewModel(applica
     private val savedPackages = store.data.map { it[KEY_PACKAGES] ?: emptySet() }
     private val internalTimestamps = store.data.map { parseTimestamps(it[KEY_INTERNAL_TIMESTAMPS]) }
     private val customNames = store.data.map { parseCustomNames(it[KEY_CUSTOM_NAMES]) }
+    private val pinnedPackages = store.data.map { it[KEY_PINNED_PACKAGES] ?: emptySet() }
     private val settingsFlow = store.data.map { prefs ->
         val sortModeName = prefs[KEY_SORT_MODE] ?: SortMode.RECENT.name
         val sortMode = runCatching { SortMode.valueOf(sortModeName) }.getOrDefault(SortMode.RECENT)
@@ -98,12 +101,13 @@ class GameLauncherViewModel(application: Application) : AndroidViewModel(applica
         combine(internalTimestamps, systemUsageStats, settingsFlow, usageAccessStatusFlow, showUsageDialogFlow) { internalTimes, systemTimes, settings, usageStatus, showDialog ->
             CombinedSettingsData(internalTimes, systemTimes, settings, usageStatus, showDialog)
         },
-        customNames
-    ) { appData, settingsData, nameMap ->
+        customNames,
+        pinnedPackages
+    ) { appData, settingsData, nameMap, pinnedSet ->
         val q = appData.query.trim()
         val settings = settingsData.settings
 
-        // Gắn timestamp hiệu lực và displayName cho từng game trong thư viện
+        // Gắn timestamp hiệu lực, displayName và isPinned cho từng game trong thư viện
         val libraryWithData = appData.all
             .filter { it.packageName in appData.saved }
             .map { game ->
@@ -111,10 +115,15 @@ class GameLauncherViewModel(application: Application) : AndroidViewModel(applica
                 val systemTime = settingsData.systemTimes[game.packageName] ?: 0L
                 val effectiveTime = maxOf(internalTime, systemTime)
                 val displayName = nameMap[game.packageName] ?: game.name
-                game.copy(lastPlayed = effectiveTime, displayName = displayName)
+                val isPinned = game.packageName in pinnedSet
+                game.copy(
+                    lastPlayed = effectiveTime,
+                    displayName = displayName,
+                    isPinned = isPinned
+                )
             }
 
-        // Sắp xếp theo cấu hình đã chọn (dùng displayName cho chế độ NAME)
+        // Sắp xếp: Game ghim luôn lên đầu, trong từng nhóm sắp xếp theo sortMode
         val sortedLibrary = libraryWithData.sortedWith(createComparator(settings.sortMode))
 
         val candidates = appData.all.filter {
@@ -148,15 +157,20 @@ class GameLauncherViewModel(application: Application) : AndroidViewModel(applica
             val apps = withContext(Dispatchers.IO) { queryLaunchableApps() }
             allApps.value = apps
             val installed = apps.map { it.packageName }.toSet()
-            store.edit { prefs ->
-                val currentLibrary = prefs[KEY_PACKAGES] ?: emptySet()
-                val removedPackages = currentLibrary - installed
-                if (removedPackages.isNotEmpty()) {
-                    prefs[KEY_PACKAGES] = currentLibrary.intersect(installed)
-                    // Xóa tên tùy chỉnh của game đã bị gỡ
-                    val currentNames = parseCustomNames(prefs[KEY_CUSTOM_NAMES]).toMutableMap()
-                    removedPackages.forEach { currentNames.remove(it) }
-                    prefs[KEY_CUSTOM_NAMES] = formatCustomNames(currentNames)
+            withContext(Dispatchers.IO) {
+                store.edit { prefs ->
+                    val currentLibrary = prefs[KEY_PACKAGES] ?: emptySet()
+                    val removedPackages = currentLibrary - installed
+                    if (removedPackages.isNotEmpty()) {
+                        prefs[KEY_PACKAGES] = currentLibrary.intersect(installed)
+                        // Xóa tên tùy chỉnh của game đã bị gỡ
+                        val currentNames = parseCustomNames(prefs[KEY_CUSTOM_NAMES]).toMutableMap()
+                        removedPackages.forEach { currentNames.remove(it) }
+                        prefs[KEY_CUSTOM_NAMES] = formatCustomNames(currentNames)
+                        // Tự bỏ khỏi tập đã ghim khi game bị gỡ
+                        val currentPinned = prefs[KEY_PINNED_PACKAGES] ?: emptySet()
+                        prefs[KEY_PINNED_PACKAGES] = currentPinned - removedPackages
+                    }
                 }
             }
         }
@@ -170,21 +184,26 @@ class GameLauncherViewModel(application: Application) : AndroidViewModel(applica
             allApps.value = apps
 
             val installed = apps.map { it.packageName }.toSet()
-            store.edit { prefs ->
-                if (prefs[KEY_INITIALIZED] != true) {
-                    // Lần đầu: tự thêm các app được hệ thống nhận là game
-                    prefs[KEY_PACKAGES] = apps.filter { it.isGame }.map { it.packageName }.toSet()
-                    prefs[KEY_INITIALIZED] = true
-                } else {
-                    // Các lần sau: bỏ app đã bị gỡ cài đặt
-                    val currentLibrary = prefs[KEY_PACKAGES] ?: emptySet()
-                    val removedPackages = currentLibrary - installed
-                    prefs[KEY_PACKAGES] = currentLibrary.intersect(installed)
-                    // Xóa tên tùy chỉnh của game đã bị gỡ
-                    if (removedPackages.isNotEmpty()) {
-                        val currentNames = parseCustomNames(prefs[KEY_CUSTOM_NAMES]).toMutableMap()
-                        removedPackages.forEach { currentNames.remove(it) }
-                        prefs[KEY_CUSTOM_NAMES] = formatCustomNames(currentNames)
+            withContext(Dispatchers.IO) {
+                store.edit { prefs ->
+                    if (prefs[KEY_INITIALIZED] != true) {
+                        // Lần đầu: tự thêm các app được hệ thống nhận là game
+                        prefs[KEY_PACKAGES] = apps.filter { it.isGame }.map { it.packageName }.toSet()
+                        prefs[KEY_INITIALIZED] = true
+                    } else {
+                        // Các lần sau: bỏ app đã bị gỡ cài đặt
+                        val currentLibrary = prefs[KEY_PACKAGES] ?: emptySet()
+                        val removedPackages = currentLibrary - installed
+                        prefs[KEY_PACKAGES] = currentLibrary.intersect(installed)
+                        // Xóa tên tùy chỉnh và bỏ ghim của game đã bị gỡ
+                        if (removedPackages.isNotEmpty()) {
+                            val currentNames = parseCustomNames(prefs[KEY_CUSTOM_NAMES]).toMutableMap()
+                            removedPackages.forEach { currentNames.remove(it) }
+                            prefs[KEY_CUSTOM_NAMES] = formatCustomNames(currentNames)
+
+                            val currentPinned = prefs[KEY_PINNED_PACKAGES] ?: emptySet()
+                            prefs[KEY_PINNED_PACKAGES] = currentPinned - removedPackages
+                        }
                     }
                 }
             }
@@ -195,19 +214,38 @@ class GameLauncherViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun addGame(packageName: String) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             store.edit { it[KEY_PACKAGES] = (it[KEY_PACKAGES] ?: emptySet()) + packageName }
         }
     }
 
-    /** Xóa game khỏi thư viện, đồng thời xóa tên tùy chỉnh nếu có. */
+    /** Xóa game khỏi thư viện, đồng thời xóa tên tùy chỉnh và bỏ ghim nếu có. */
     fun removeGame(packageName: String) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             store.edit { prefs ->
                 prefs[KEY_PACKAGES] = (prefs[KEY_PACKAGES] ?: emptySet()) - packageName
                 val currentNames = parseCustomNames(prefs[KEY_CUSTOM_NAMES]).toMutableMap()
                 if (currentNames.remove(packageName) != null) {
                     prefs[KEY_CUSTOM_NAMES] = formatCustomNames(currentNames)
+                }
+                // Tự bỏ khỏi tập đã ghim khi xóa game khỏi thư viện
+                val currentPinned = prefs[KEY_PINNED_PACKAGES] ?: emptySet()
+                if (packageName in currentPinned) {
+                    prefs[KEY_PINNED_PACKAGES] = currentPinned - packageName
+                }
+            }
+        }
+    }
+
+    /** Ghim hoặc bỏ ghim game yêu thích lên đầu danh sách. */
+    fun togglePinGame(packageName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            store.edit { prefs ->
+                val current = prefs[KEY_PINNED_PACKAGES] ?: emptySet()
+                if (packageName in current) {
+                    prefs[KEY_PINNED_PACKAGES] = current - packageName
+                } else {
+                    prefs[KEY_PINNED_PACKAGES] = current + packageName
                 }
             }
         }
@@ -217,7 +255,7 @@ class GameLauncherViewModel(application: Application) : AndroidViewModel(applica
      * Lưu tên tùy chỉnh cho game. Nếu [customName] rỗng thì xóa tên tùy chỉnh (khôi phục tên gốc).
      */
     fun onRename(packageName: String, customName: String) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             store.edit { prefs ->
                 val currentNames = parseCustomNames(prefs[KEY_CUSTOM_NAMES]).toMutableMap()
                 val trimmed = customName.trim()
@@ -233,7 +271,7 @@ class GameLauncherViewModel(application: Application) : AndroidViewModel(applica
 
     /** Xóa tên tùy chỉnh, khôi phục về tên gốc. */
     fun onResetName(packageName: String) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             store.edit { prefs ->
                 val currentNames = parseCustomNames(prefs[KEY_CUSTOM_NAMES]).toMutableMap()
                 currentNames.remove(packageName)
@@ -248,14 +286,14 @@ class GameLauncherViewModel(application: Application) : AndroidViewModel(applica
 
     /** Lưu chế độ sắp xếp bền vững vào DataStore. */
     fun setSortMode(mode: SortMode) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             store.edit { it[KEY_SORT_MODE] = mode.name }
         }
     }
 
     /** Lưu chế độ số cột bền vững vào DataStore. */
     fun setColumnsMode(columns: ColumnsMode) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val count = when (columns) {
                 is ColumnsMode.Auto -> 0
                 is ColumnsMode.Fixed -> columns.count
@@ -266,7 +304,7 @@ class GameLauncherViewModel(application: Application) : AndroidViewModel(applica
 
     /** Ghi nhận thời điểm mở game thành công từ launcher (nguồn a). */
     fun recordGameLaunched(packageName: String) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val now = System.currentTimeMillis()
             store.edit { prefs ->
                 val current = parseTimestamps(prefs[KEY_INTERNAL_TIMESTAMPS]).toMutableMap()
@@ -314,7 +352,7 @@ class GameLauncherViewModel(application: Application) : AndroidViewModel(applica
     /** Người dùng chọn "Để sau" trên dialog xin quyền. */
     fun onDismissUsagePermissionDialog() {
         showUsageDialogFlow.value = false
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             store.edit { it[KEY_USAGE_PERMISSION_DISMISSED] = true }
         }
     }
@@ -455,11 +493,18 @@ class GameLauncherViewModel(application: Application) : AndroidViewModel(applica
     // ---------------------------------------------------------------------------------------
 
     /**
-     * Sắp xếp dùng displayName (tên tùy chỉnh) ở chế độ NAME.
-     * Chế độ RECENT vẫn dùng displayName khi thời gian bằng nhau (tiebreaker).
+     * Sắp xếp danh sách game:
+     * 1. Game được ghim (isPinned == true) luôn xếp trước game chưa ghim (isPinned == false).
+     * 2. Trong cùng một nhóm, áp dụng tiêu chí của sortMode (NAME hoặc RECENT).
      */
     private fun createComparator(sortMode: SortMode): Comparator<GameModel> {
         return Comparator { a, b ->
+            // 1. Ưu tiên ghim: Game được ghim luôn đứng đầu
+            if (a.isPinned != b.isPinned) {
+                return@Comparator if (a.isPinned) -1 else 1
+            }
+
+            // 2. Trong từng nhóm, áp dụng SortMode
             when (sortMode) {
                 SortMode.NAME -> a.displayName.compareTo(b.displayName, ignoreCase = true)
                 SortMode.RECENT -> {
