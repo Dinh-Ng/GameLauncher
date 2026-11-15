@@ -152,26 +152,31 @@ class GameLauncherViewModel(application: Application) : AndroidViewModel(applica
     /** Gọi khi Activity resume để cập nhật dữ liệu lần chơi, kiểm tra lại quyền và quét app (phát hiện app bị gỡ). */
     fun onResume() {
         viewModelScope.launch {
-            updateUsageStatsIfGranted()
-            // Quét lại để game bị gỡ cài đặt biến mất khỏi thư viện
-            val apps = withContext(Dispatchers.IO) { queryLaunchableApps() }
-            allApps.value = apps
-            val installed = apps.map { it.packageName }.toSet()
-            withContext(Dispatchers.IO) {
-                store.edit { prefs ->
-                    val currentLibrary = prefs[KEY_PACKAGES] ?: emptySet()
-                    val removedPackages = currentLibrary - installed
-                    if (removedPackages.isNotEmpty()) {
-                        prefs[KEY_PACKAGES] = currentLibrary.intersect(installed)
-                        // Xóa tên tùy chỉnh của game đã bị gỡ
-                        val currentNames = parseCustomNames(prefs[KEY_CUSTOM_NAMES]).toMutableMap()
-                        removedPackages.forEach { currentNames.remove(it) }
-                        prefs[KEY_CUSTOM_NAMES] = formatCustomNames(currentNames)
-                        // Tự bỏ khỏi tập đã ghim khi game bị gỡ
-                        val currentPinned = prefs[KEY_PINNED_PACKAGES] ?: emptySet()
-                        prefs[KEY_PINNED_PACKAGES] = currentPinned - removedPackages
+            isLoading.value = true
+            try {
+                updateUsageStatsIfGranted()
+                // Quét lại để game bị gỡ cài đặt biến mất khỏi thư viện
+                val apps = withContext(Dispatchers.IO) { queryLaunchableApps() }
+                allApps.value = apps
+                val installed = apps.map { it.packageName }.toSet()
+                withContext(Dispatchers.IO) {
+                    store.edit { prefs ->
+                        val currentLibrary = prefs[KEY_PACKAGES] ?: emptySet()
+                        val removedPackages = currentLibrary - installed
+                        if (removedPackages.isNotEmpty()) {
+                            prefs[KEY_PACKAGES] = currentLibrary.intersect(installed)
+                            // Xóa tên tùy chỉnh của game đã bị gỡ
+                            val currentNames = parseCustomNames(prefs[KEY_CUSTOM_NAMES]).toMutableMap()
+                            removedPackages.forEach { currentNames.remove(it) }
+                            prefs[KEY_CUSTOM_NAMES] = formatCustomNames(currentNames)
+                            // Tự bỏ khỏi tập đã ghim khi game bị gỡ
+                            val currentPinned = prefs[KEY_PINNED_PACKAGES] ?: emptySet()
+                            prefs[KEY_PINNED_PACKAGES] = currentPinned - removedPackages
+                        }
                     }
                 }
+            } finally {
+                isLoading.value = false
             }
         }
     }

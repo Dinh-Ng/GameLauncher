@@ -6,6 +6,12 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -84,6 +90,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -171,6 +178,18 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
     // State cho các dialog
     var renameGame by remember { mutableStateOf<GameModel?>(null) }
     var removeConfirmGame by remember { mutableStateOf<GameModel?>(null) }
+
+    // Hiệu ứng xoay icon refresh khi đang reload / onResume
+    val infiniteTransition = rememberInfiniteTransition(label = "RefreshRotation")
+    val rotationAngle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "RotationAngle"
+    )
 
     // Làm mới dữ liệu khi app quay lại foreground (ON_RESUME)
     DisposableEffect(lifecycleOwner) {
@@ -316,8 +335,17 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
                     }
 
                     // Quét lại danh sách
-                    IconButton(onClick = viewModel::refresh) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "Quét lại")
+                    IconButton(
+                        onClick = viewModel::refresh,
+                        enabled = !state.isLoading
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Refresh,
+                            contentDescription = "Quét lại",
+                            modifier = Modifier.graphicsLayer {
+                                rotationZ = if (state.isLoading) rotationAngle else 0f
+                            }
+                        )
                     }
                 }
             )
