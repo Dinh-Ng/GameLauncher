@@ -4,7 +4,6 @@ import android.content.ActivityNotFoundException
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.LinearEasing
@@ -44,7 +43,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
@@ -87,7 +85,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -109,45 +106,13 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 
-/**
- * Trạng thái màn hình để điều hướng mà không cần thêm thư viện ngoài.
- */
-sealed interface Screen {
-    data object Home : Screen
-    data object Stats : Screen
-}
-
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             GameLauncherTheme {
-                var currentScreen by rememberSaveable { mutableStateOf("home") }
-                val launcherViewModel: GameLauncherViewModel = viewModel()
-                val statsViewModel: StatsViewModel = viewModel()
-
-                // Nút Back hệ thống quay về màn hình chính
-                BackHandler(enabled = currentScreen == "stats") {
-                    currentScreen = "home"
-                }
-
-                when (currentScreen) {
-                    "home" -> {
-                        GameLauncherScreen(
-                            viewModel = launcherViewModel,
-                            onNavigateToStats = { currentScreen = "stats" }
-                        )
-                    }
-                    "stats" -> {
-                        val state by launcherViewModel.uiState.collectAsStateWithLifecycle()
-                        StatsScreen(
-                            viewModel = statsViewModel,
-                            libraryGames = state.library,
-                            onBack = { currentScreen = "home" }
-                        )
-                    }
-                }
+                GameLauncherScreen()
             }
         }
     }
@@ -197,10 +162,7 @@ private sealed interface GameMenuAction {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GameLauncherScreen(
-    viewModel: GameLauncherViewModel = viewModel(),
-    onNavigateToStats: () -> Unit = {}
-) {
+fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -370,11 +332,6 @@ fun GameLauncherScreen(
                     // Tùy chỉnh hiển thị (số cột, quyền)
                     IconButton(onClick = { showDisplaySheet = true }) {
                         Icon(Icons.Filled.GridView, contentDescription = "Tùy chỉnh hiển thị")
-                    }
-
-                    // Thống kê thời gian chơi
-                    IconButton(onClick = onNavigateToStats) {
-                        Icon(Icons.Filled.BarChart, contentDescription = "Thống kê thời gian chơi")
                     }
 
                     // Quét lại danh sách
@@ -815,7 +772,6 @@ private fun GameGridItem(
                 lineHeight = titleLineHeightSp.sp,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
-                minLines = 2,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center
