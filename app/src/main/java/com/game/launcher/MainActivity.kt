@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.LinearEasing
@@ -43,6 +44,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
@@ -57,6 +59,8 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -68,6 +72,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
@@ -82,9 +88,12 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -112,7 +121,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             GameLauncherTheme {
-                GameLauncherScreen()
+                MainAppRoot()
             }
         }
     }
@@ -157,12 +166,134 @@ private sealed interface GameMenuAction {
 }
 
 // ------------------------------------------------------------------------------------------
-// Màn hình chính
+// Root điều hướng có NavigationBar 2 tab: "Game" và "Quà"
+// ------------------------------------------------------------------------------------------
+
+@Composable
+fun MainAppRoot(
+    launcherViewModel: GameLauncherViewModel = viewModel(),
+    giftViewModel: GiftViewModel = viewModel()
+) {
+    val context = LocalContext.current
+    val launcherState by launcherViewModel.uiState.collectAsStateWithLifecycle()
+    val giftState by giftViewModel.uiState.collectAsStateWithLifecycle()
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // Đồng bộ danh sách thư viện game sang GiftViewModel
+    LaunchedEffect(launcherState.library) {
+        giftViewModel.updateLibrary(launcherState.library)
+    }
+
+    // Nhấn Back khi đang ở tab Quà -> quay về tab Game
+    BackHandler(enabled = selectedTab != 0) {
+        selectedTab = 0
+    }
+
+    // ON_RESUME: làm mới dữ liệu cả 2 ViewModel
+    DisposableEffect(lifecycleOwner, selectedTab) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                launcherViewModel.onResume()
+                giftViewModel.onResume(currentTabIsGift = (selectedTab == 1))
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        bottomBar = {
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer
+            ) {
+                NavigationBarItem(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Filled.SportsEsports,
+                            contentDescription = "Game"
+                        )
+                    },
+                    label = { Text("Game") }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 1,
+                    onClick = {
+                        if (selectedTab != 1) {
+                            giftViewModel.onTabGiftSelected()
+                        }
+                        selectedTab = 1
+                    },
+                    icon = {
+                        val readyCount = giftState.groups.readyCount
+                        BadgedBox(
+                            badge = {
+                                if (readyCount > 0) {
+                                    Badge { Text("$readyCount") }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.CardGiftcard,
+                                contentDescription = "Quà"
+                            )
+                        }
+                    },
+                    label = { Text("Quà") }
+                )
+            }
+        }
+    ) { innerPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom = innerPadding.calculateBottomPadding())
+        ) {
+            when (selectedTab) {
+                0 -> GameLauncherScreen(
+                    viewModel = launcherViewModel,
+                    giftViewModel = giftViewModel
+                )
+                1 -> GiftScreen(
+                    viewModel = giftViewModel,
+                    libraryGames = launcherState.library,
+                    onLaunchGame = { game, giftId ->
+                        if (giftId != null) {
+                            giftViewModel.markLaunchedFromReadyGift(giftId)
+                        }
+                        val intent = launcherViewModel.getLaunchIntent(game.packageName)
+                        if (intent != null) {
+                            try {
+                                context.startActivity(intent)
+                                launcherViewModel.recordGameLaunched(game.packageName)
+                            } catch (e: ActivityNotFoundException) {
+                                Toast.makeText(context, "Không thể mở ${game.displayName}", Toast.LENGTH_SHORT).show()
+                            }
+                        } else {
+                            Toast.makeText(context, "Không thể mở ${game.displayName}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------------------
+// Màn hình chính (Thư viện game)
 // ------------------------------------------------------------------------------------------
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
+fun GameLauncherScreen(
+    viewModel: GameLauncherViewModel = viewModel(),
+    giftViewModel: GiftViewModel = viewModel()
+) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -552,13 +683,19 @@ fun GameLauncherScreen(viewModel: GameLauncherViewModel = viewModel()) {
 
     // Hộp thoại xác nhận xóa game khỏi thư viện
     removeConfirmGame?.let { game ->
+        val hasGifts = giftViewModel.hasGiftsForPackage(game.packageName)
         AlertDialog(
             onDismissRequest = { removeConfirmGame = null },
             title = { Text("Xóa khỏi thư viện?") },
-            text = { Text("${game.displayName} sẽ được bỏ khỏi danh sách (không gỡ cài đặt app).") },
+            text = {
+                val baseMsg = "${game.displayName} sẽ được bỏ khỏi danh sách (không gỡ cài đặt app)."
+                val msg = if (hasGifts) "$baseMsg\n\nCác quà đã ghi của game này cũng sẽ bị xóa." else baseMsg
+                Text(msg)
+            },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.removeGame(game.packageName)
+                    giftViewModel.deleteGiftsForPackage(game.packageName)
                     removeConfirmGame = null
                 }) { Text("Xóa") }
             },

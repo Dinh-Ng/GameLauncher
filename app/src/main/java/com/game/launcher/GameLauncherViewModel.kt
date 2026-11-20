@@ -172,6 +172,17 @@ class GameLauncherViewModel(application: Application) : AndroidViewModel(applica
                             // Tự bỏ khỏi tập đã ghim khi game bị gỡ
                             val currentPinned = prefs[KEY_PINNED_PACKAGES] ?: emptySet()
                             prefs[KEY_PINNED_PACKAGES] = currentPinned - removedPackages
+
+                            // Xóa toàn bộ note của game bị gỡ và hủy báo thức
+                            val giftRepo = GiftRepository(appContext)
+                            val scheduler = GiftScheduler(appContext)
+                            removedPackages.forEach { pkg ->
+                                val deletedIds = giftRepo.deleteGiftsForPackage(pkg)
+                                deletedIds.forEach { id ->
+                                    scheduler.cancelAlarm(id)
+                                    scheduler.cancelNotification(id)
+                                }
+                            }
                         }
                     }
                 }
@@ -208,6 +219,17 @@ class GameLauncherViewModel(application: Application) : AndroidViewModel(applica
 
                             val currentPinned = prefs[KEY_PINNED_PACKAGES] ?: emptySet()
                             prefs[KEY_PINNED_PACKAGES] = currentPinned - removedPackages
+
+                            // Xóa toàn bộ note của game bị gỡ và hủy báo thức
+                            val giftRepo = GiftRepository(appContext)
+                            val scheduler = GiftScheduler(appContext)
+                            removedPackages.forEach { pkg ->
+                                val deletedIds = giftRepo.deleteGiftsForPackage(pkg)
+                                deletedIds.forEach { id ->
+                                    scheduler.cancelAlarm(id)
+                                    scheduler.cancelNotification(id)
+                                }
+                            }
                         }
                     }
                 }
@@ -237,6 +259,15 @@ class GameLauncherViewModel(application: Application) : AndroidViewModel(applica
                 val currentPinned = prefs[KEY_PINNED_PACKAGES] ?: emptySet()
                 if (packageName in currentPinned) {
                     prefs[KEY_PINNED_PACKAGES] = currentPinned - packageName
+                }
+
+                // Xóa note quà và hủy báo thức
+                val giftRepo = GiftRepository(appContext)
+                val scheduler = GiftScheduler(appContext)
+                val deletedIds = giftRepo.deleteGiftsForPackage(packageName)
+                deletedIds.forEach { id ->
+                    scheduler.cancelAlarm(id)
+                    scheduler.cancelNotification(id)
                 }
             }
         }
