@@ -1130,16 +1130,23 @@ fun RescheduleSheet(
 ) {
     val context = LocalContext.current
 
-    // Chip được chọn sẵn = chip nhanh đã dùng lần gần nhất, fallback "+1 giờ"
-    val defaultChipIndex = run {
+    // Khởi tạo số giờ và số phút từ offset lần trước
+    val initialHours = run {
         val offset = gift.lastQuickOffsetMillis
-        if (offset != null) {
-            val idx = QUICK_CHIP_OFFSETS.indexOf(offset)
-            if (idx >= 0) idx else DEFAULT_QUICK_CHIP_INDEX
-        } else DEFAULT_QUICK_CHIP_INDEX
+        if (offset != null && offset > 0) (offset / 3_600_000L).toString() else "1"
     }
-    var selectedChipIndex by remember { mutableIntStateOf(defaultChipIndex) }
-    var customDateTime by remember { mutableStateOf<LocalDateTime?>(null) }
+    val initialMinutes = run {
+        val offset = gift.lastQuickOffsetMillis
+        if (offset != null && offset > 0) ((offset % 3_600_000L) / 60_000L).toString() else "0"
+    }
+    var hoursText by remember { mutableStateOf(initialHours) }
+    var minutesText by remember { mutableStateOf(initialMinutes) }
+    var customSpecificDateTime by remember { mutableStateOf<LocalDateTime?>(null) }
+    var timeError by remember { mutableStateOf<String?>(null) }
+
+    val hours = hoursText.toIntOrNull() ?: 0
+    val minutes = minutesText.toIntOrNull() ?: 0
+    val totalMinutes = hours * 60 + minutes
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -1183,61 +1190,116 @@ fun RescheduleSheet(
             )
             Spacer(Modifier.height(8.dp))
 
-            // Chip chọn nhanh
-            androidx.compose.foundation.layout.FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+            // Nhập giờ và phút
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                QUICK_CHIP_LABELS.forEachIndexed { index, label ->
-                    FilterChip(
-                        selected = selectedChipIndex == index,
-                        onClick = {
-                            selectedChipIndex = index
-                            customDateTime = null
-                        },
-                        label = { Text(label, style = MaterialTheme.typography.labelSmall) }
-                    )
-                }
-                FilterChip(
-                    selected = selectedChipIndex == -1,
-                    onClick = {
-                        selectedChipIndex = -1
-                        val cal = Calendar.getInstance()
-                        cal.add(Calendar.HOUR_OF_DAY, 1)
-                        DatePickerDialog(
-                            context,
-                            { _, year, month, dayOfMonth ->
-                                TimePickerDialog(
-                                    context,
-                                    { _, hourOfDay, minute ->
-                                        customDateTime = LocalDateTime.of(
-                                            LocalDate.of(year, month + 1, dayOfMonth),
-                                            LocalTime.of(hourOfDay, minute)
-                                        )
-                                    },
-                                    cal.get(Calendar.HOUR_OF_DAY),
-                                    cal.get(Calendar.MINUTE),
-                                    true
-                                ).show()
-                            },
-                            cal.get(Calendar.YEAR),
-                            cal.get(Calendar.MONTH),
-                            cal.get(Calendar.DAY_OF_MONTH)
-                        ).show()
+                OutlinedTextField(
+                    value = hoursText,
+                    onValueChange = { input ->
+                        if (input.all { it.isDigit() } && input.length <= 4) {
+                            hoursText = input
+                            customSpecificDateTime = null
+                            timeError = null
+                        }
                     },
-                    label = { Text("Tùy chọn", style = MaterialTheme.typography.labelSmall) }
+                    label = { Text("Số giờ") },
+                    placeholder = { Text("0") },
+                    suffix = { Text("giờ") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = minutesText,
+                    onValueChange = { input ->
+                        if (input.all { it.isDigit() } && input.length <= 3) {
+                            minutesText = input
+                            customSpecificDateTime = null
+                            timeError = null
+                        }
+                    },
+                    label = { Text("Số phút") },
+                    placeholder = { Text("0") },
+                    suffix = { Text("phút") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f)
                 )
             }
 
-            if (selectedChipIndex == -1 && customDateTime != null) {
-                Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(8.dp))
+
+            // Xem trước thời điểm
+            if (customSpecificDateTime != null) {
+                val targetMillis = customSpecificDateTime!!.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Đã chọn lịch: ${formatEpochMillis(targetMillis)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    TextButton(onClick = { customSpecificDateTime = null }) {
+                        Text("Dùng giờ/phút")
+                    }
+                }
+            } else if (totalMinutes > 0) {
+                val previewMillis = System.currentTimeMillis() + totalMinutes * 60_000L
                 Text(
-                    text = "Đã chọn: ${formatEpochMillis(
-                        customDateTime!!.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                    )}",
+                    text = "Dự kiến có quà: ${formatEpochMillis(previewMillis)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary
                 )
+            } else {
+                Text(
+                    text = "Vui lòng nhập thời gian lớn hơn 0 phút",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+
+            // Tùy chọn mở DatePicker / TimePicker
+            TextButton(
+                onClick = {
+                    val cal = Calendar.getInstance()
+                    cal.add(Calendar.HOUR_OF_DAY, 1)
+                    DatePickerDialog(
+                        context,
+                        { _, year, month, dayOfMonth ->
+                            TimePickerDialog(
+                                context,
+                                { _, hourOfDay, minute ->
+                                    customSpecificDateTime = LocalDateTime.of(
+                                        LocalDate.of(year, month + 1, dayOfMonth),
+                                        LocalTime.of(hourOfDay, minute)
+                                    )
+                                    timeError = null
+                                },
+                                cal.get(Calendar.HOUR_OF_DAY),
+                                cal.get(Calendar.MINUTE),
+                                true
+                            ).show()
+                        },
+                        cal.get(Calendar.YEAR),
+                        cal.get(Calendar.MONTH),
+                        cal.get(Calendar.DAY_OF_MONTH)
+                    ).show()
+                }
+            ) {
+                Icon(Icons.Filled.Schedule, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Chọn ngày & giờ cụ thể...")
+            }
+
+            timeError?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(text = it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
 
             Spacer(Modifier.height(24.dp))
@@ -1248,19 +1310,24 @@ fun RescheduleSheet(
                 Button(
                     onClick = {
                         val now = System.currentTimeMillis()
-                        val newAt = when {
-                            selectedChipIndex in QUICK_CHIP_OFFSETS.indices ->
-                                now + QUICK_CHIP_OFFSETS[selectedChipIndex]
-                            selectedChipIndex == -1 -> customDateTime
-                                ?.atZone(ZoneId.systemDefault())?.toInstant()?.toEpochMilli()
-                                ?: return@Button
-                            else -> return@Button
+                        val (newAt, newOffset) = if (customSpecificDateTime != null) {
+                            val target = customSpecificDateTime!!.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                            if (target <= now) {
+                                timeError = "Thời điểm phải ở tương lai"
+                                return@Button
+                            }
+                            target to null
+                        } else {
+                            if (totalMinutes <= 0) {
+                                timeError = "Vui lòng nhập thời gian lớn hơn 0 phút"
+                                return@Button
+                            }
+                            val offset = totalMinutes * 60_000L
+                            (now + offset) to offset
                         }
-                        val newOffset = if (selectedChipIndex in QUICK_CHIP_OFFSETS.indices)
-                            QUICK_CHIP_OFFSETS[selectedChipIndex] else null
                         onSave(newAt, newOffset)
                     },
-                    enabled = selectedChipIndex != -1 || customDateTime != null
+                    enabled = totalMinutes > 0 || customSpecificDateTime != null
                 ) { Text("Lưu") }
             }
         }
